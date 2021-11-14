@@ -1,5 +1,17 @@
 import React, { useEffect, useState } from "react";
 import styled from "styled-components";
+import {
+  Connection,
+  PublicKey,
+  clusterApiUrl,
+  Commitment,
+  ConfirmOptions,
+} from "@solana/web3.js";
+import { Idl, Program, Provider, web3 } from "@project-serum/anchor";
+import Loader from "react-loader-spinner";
+
+import kp from "./keypair.json";
+import idl from "./idl.json";
 
 const Wrapper = styled.div`
   margin-top: 48px;
@@ -38,22 +50,26 @@ const Button = styled.button`
   }
 `;
 
-const InputImagesWrapper = styled.div``;
+const InputImagesWrapper = styled.div`
+  width: 100%;
+`;
 
 const InputWrapper = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 32px auto 0;
-
+  max-width: 600px;
+  width: 100%;
   @media (max-width: 600px) {
     margin: 0 12px;
     flex-direction: column;
+    width: initial;
   }
 `;
 
 const StyledInput = styled.input`
-  max-width: 360px;
+  max-width: 400px;
   width: 100%;
   height: 46px;
   background-color: #efefef;
@@ -89,6 +105,11 @@ const SubmitButton = styled(Button)`
   }
 `;
 
+const InitializationButton = styled(Button)`
+  margin-top: initial;
+  min-width: initial;
+`;
+
 const ImagesWrapper = styled.div`
   max-width: 1440px;
   margin: 0 auto;
@@ -113,23 +134,42 @@ const Image = styled.img`
   border-radius: 16px;
 `;
 
+const LoaderWrapper = styled.div`
+  display: flex;
+  justify-content: center;
+`;
+
 declare global {
   interface Window {
     solana?: any;
   }
 }
 
-const TEST_GIFS = [
-  "https://i.giphy.com/media/eIG0HfouRQJQr1wBzz/giphy.webp",
-  "https://media3.giphy.com/media/L71a8LW2UrKwPaWNYM/giphy.gif?cid=ecf05e47rr9qizx2msjucl1xyvuu47d7kf25tqt2lvo024uo&rid=giphy.gif&ct=g",
-  "https://media4.giphy.com/media/AeFmQjHMtEySooOc8K/giphy.gif?cid=ecf05e47qdzhdma2y3ugn32lkgi972z9mpfzocjj6z1ro4ec&rid=giphy.gif&ct=g",
-  "https://i.giphy.com/media/PAqjdPkJLDsmBRSYUp/giphy.webp",
-];
+// SystemProgram is a reference to the Solana runtime!
+const { SystemProgram } = web3;
+
+const arr = Object.values(kp._keypair.secretKey);
+const secret = new Uint8Array(arr);
+const baseAccount = web3.Keypair.fromSecretKey(secret);
+
+// Get our program's id form the IDL file.
+const programID = new PublicKey(idl.metadata.address);
+
+// Set our network to devent.
+const network = clusterApiUrl("devnet");
+
+// Control's how we want to acknowledge when a trasnaction is "done".
+const opts = {
+  preflightCommitment: "processed",
+};
 
 function App() {
   const [walletAddress, setWalletAddress] = useState(null);
   const [inputValue, setInputValue] = useState("");
-  const [gifList, setGifList] = useState<string[]>([]);
+  const [imageList, setImageList] = useState<{ imageLink: string }[] | null>(
+    []
+  );
+  const [loading, setLoading] = useState<boolean>(false);
 
   const checkIfWalletIsConnected = async () => {
     try {
@@ -163,6 +203,82 @@ function App() {
     }
   };
 
+  const getProvider = () => {
+    const connection = new Connection(
+      network,
+      opts.preflightCommitment as Commitment
+    );
+    const provider = new Provider(
+      connection,
+      window.solana,
+      opts.preflightCommitment as ConfirmOptions
+    );
+    return provider;
+  };
+
+  const getImageList = async () => {
+    try {
+      const provider = getProvider();
+      const program = new Program(idl as Idl, programID, provider);
+      const account = await program.account.baseAccount.fetch(
+        baseAccount.publicKey
+      );
+
+      console.log("Got the account", account);
+      setImageList(account.imageList);
+    } catch (error) {
+      console.log("Error in getImages: ", error);
+      setImageList(null);
+    }
+  };
+
+  const createImageAccount = async () => {
+    try {
+      const provider = getProvider();
+      const program = new Program(idl as Idl, programID, provider);
+      console.log("ping");
+      await program.rpc.startStuffOff({
+        accounts: {
+          baseAccount: baseAccount.publicKey,
+          user: provider.wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        },
+        signers: [baseAccount],
+      });
+      console.log(
+        "Created a new BaseAccount w/ address:",
+        baseAccount.publicKey.toString()
+      );
+      await getImageList();
+    } catch (error) {
+      console.log("Error creating BaseAccount account:", error);
+    }
+  };
+
+  const sendImage = async () => {
+    console.log("Image link:", inputValue);
+    setLoading(true);
+    try {
+      const provider = getProvider();
+      const program = new Program(idl as Idl, programID, provider);
+
+      await program.rpc.addImage(inputValue, {
+        accounts: {
+          baseAccount: baseAccount.publicKey,
+          user: provider.wallet.publicKey,
+        },
+      });
+      console.log("Image successfully sent to program", inputValue);
+
+      await getImageList();
+      setInputValue("");
+      setLoading(false);
+    } catch (error) {
+      console.log("Error sending Image:", error);
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     window.addEventListener("load", async (event) => {
       await checkIfWalletIsConnected();
@@ -173,7 +289,7 @@ function App() {
     if (walletAddress) {
       console.log("Fetching GIF list...");
 
-      setGifList(TEST_GIFS);
+      getImageList();
     }
   }, [walletAddress]);
 
@@ -183,24 +299,44 @@ function App() {
       <p>Architecture inspo in the metaverse ✨</p>
       {!walletAddress ? (
         <Button onClick={connectWallet}>Connect Wallet</Button>
+      ) : imageList === null ? (
+        <InitializationButton onClick={createImageAccount}>
+          Do One-Time Initialization For Image Program Account
+        </InitializationButton>
       ) : (
         <InputImagesWrapper>
-          <InputWrapper>
-            <StyledInput
-              placeholder="Enter a message"
-              value={inputValue}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                setInputValue(e.target.value);
-              }}
-            />
-            <SubmitButton>Submit</SubmitButton>
-          </InputWrapper>
+          {loading ? (
+            <LoaderWrapper>
+              <Loader
+                type="TailSpin"
+                color="rgb(98, 126, 234"
+                height={100}
+                width={100}
+                timeout={0}
+              />
+            </LoaderWrapper>
+          ) : (
+            <InputWrapper>
+              <StyledInput
+                placeholder="Send Image Link"
+                value={inputValue}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  setInputValue(e.target.value);
+                }}
+              />
+              <SubmitButton disabled={!inputValue.length} onClick={sendImage}>
+                Submit
+              </SubmitButton>
+            </InputWrapper>
+          )}
           <ImagesWrapper>
-            {gifList.map((gif) => (
-              <ImageWrapper key={gif}>
-                <Image src={gif} alt={gif} />
-              </ImageWrapper>
-            ))}
+            {imageList.map(
+              ({ imageLink }: { imageLink: string }, index: number) => (
+                <ImageWrapper key={index}>
+                  <Image src={imageLink} alt={imageLink} />
+                </ImageWrapper>
+              )
+            )}
           </ImagesWrapper>
         </InputImagesWrapper>
       )}
