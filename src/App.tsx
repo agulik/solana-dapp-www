@@ -291,6 +291,7 @@ function App() {
 
       getImageList();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletAddress]);
 
   return (
